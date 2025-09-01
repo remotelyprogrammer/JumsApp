@@ -391,7 +391,7 @@ class DataSaver:
 class PipelineRunner:
     """
     Orchestrates multiple data processing pipelines (e.g., SLS and SDET)
-    using injected dependencies.
+    using injected dependencies. Designed for reusability in orchestrator systems.
     """
     def __init__(self,
                  data_reader: ExcelDataReader,
@@ -406,269 +406,408 @@ class PipelineRunner:
         self.sls_type_converter = sls_type_converter
         self.sdet_type_converter = sdet_type_converter
         self.data_saver = data_saver
+        self._cached_sheets = None  # Cache for loaded sheets
 
-    def run_sls_pipeline(self, all_sheets_dict: dict[str, pd.DataFrame]) -> str:
+    @classmethod
+    def create_from_files(cls, excel_file_path: str, branch_mapping_file_path: str, output_directory: str = "output_data"):
+        """
+        Factory method to create a PipelineRunner from file paths.
+        This is the main entry point for orchestrators.
+        
+        Args:
+            excel_file_path: Path to the Excel transaction file
+            branch_mapping_file_path: Path to the branch mapping Excel file
+            output_directory: Output directory for CSV files
+            
+        Returns:
+            Configured PipelineRunner instance
+        """
+        # Load branch mapping
+        branch_mapping_df = pd.read_excel(branch_mapping_file_path)
+        
+        # Create components with configurations
+        data_reader = ExcelDataReader(file_path=excel_file_path, header_row=2)
+        
+        sls_transformer = SlsDataFrameTransformer(
+            branch_mapping_df=branch_mapping_df,
+            sls_columns=cls._get_sls_columns(),
+            column_mapping=cls._get_sls_column_mapping()
+        )
+        
+        sdet_transformer = SdetDataFrameTransformer(
+            branch_mapping_df=branch_mapping_df,
+            sdet_columns=cls._get_sdet_columns(),
+            column_mapping=cls._get_sdet_column_mapping()
+        )
+        
+        sls_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=cls._get_sls_dtype_map())
+        sdet_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=cls._get_sdet_dtype_map())
+        
+        data_saver = DataSaver(output_dir=output_directory)
+        
+        return cls(data_reader, sls_transformer, sdet_transformer, 
+                  sls_type_converter, sdet_type_converter, data_saver)
+
+    def load_data(self) -> dict[str, pd.DataFrame]:
+        """
+        Load and cache Excel data. Called automatically by pipeline methods.
+        
+        Returns:
+            Dictionary of sheet name to DataFrame
+        """
+        if self._cached_sheets is None:
+            self._cached_sheets = self.data_reader.read_sheets()
+        return self._cached_sheets
+
+    def process_sls_only(self, verbose: bool = True) -> str:
+        """
+        Process SLS (Sales Header) pipeline only.
+        Perfect for orchestrators that need selective processing.
+        
+        Args:
+            verbose: Whether to print detailed processing information
+            
+        Returns:
+            Path to the generated SLS CSV file
+        """
+        all_sheets_dict = self.load_data()
+        return self.run_sls_pipeline(all_sheets_dict, verbose=verbose)
+
+    def process_sdet_only(self, verbose: bool = True) -> str:
+        """
+        Process SDET (Sales Detail) pipeline only.
+        Perfect for orchestrators that need selective processing.
+        
+        Args:
+            verbose: Whether to print detailed processing information
+            
+        Returns:
+            Path to the generated SDET CSV file
+        """
+        all_sheets_dict = self.load_data()
+        return self.run_sdet_pipeline(all_sheets_dict, verbose=verbose)
+
+    def process_both(self, verbose: bool = True) -> dict[str, str]:
+        """
+        Process both SLS and SDET pipelines.
+        
+        Args:
+            verbose: Whether to print detailed processing information
+            
+        Returns:
+            Dictionary with 'sls_file' and 'sdet_file' paths
+        """
+        all_sheets_dict = self.load_data()
+        
+        if verbose:
+            print("\n--- Starting All Data Pipelines ---")
+        
+        sls_output = self.run_sls_pipeline(all_sheets_dict, verbose=verbose)
+        sdet_output = self.run_sdet_pipeline(all_sheets_dict, verbose=verbose)
+
+        if verbose:
+            print("\n--- All Data Pipelines Finished ---")
+        return {"sls_file": sls_output, "sdet_file": sdet_output}
+
+    def run_sls_pipeline(self, all_sheets_dict: dict[str, pd.DataFrame], verbose: bool = True) -> str:
         """Executes the SLS data pipeline."""
-        print("\n--- SLS Data Pipeline Started ---")
+        if verbose:
+            print("\n--- SLS Data Pipeline Started ---")
+        
         processed_df = self.sls_transformer.transform(all_sheets_dict)
-        print(f"\nSLS DataFrame after transformation (first 5 rows):\n{processed_df.head().to_string()}")
-        print(f"\nSLS DataFrame after transformation (info):\n")
-        processed_df.info()
+        
+        if verbose:
+            print(f"\nSLS DataFrame after transformation (first 5 rows):\n{processed_df.head().to_string()}")
+            print(f"\nSLS DataFrame after transformation (info):\n")
+            processed_df.info()
 
         final_df = self.sls_type_converter.convert_types(processed_df)
-        print(f"\nSLS DataFrame after type conversion (first 5 rows):\n{final_df.head().to_string()}")
-        print(f"\nSLS DataFrame after type conversion (info):\n")
-        final_df.info()
+        
+        if verbose:
+            print(f"\nSLS DataFrame after type conversion (first 5 rows):\n{final_df.head().to_string()}")
+            print(f"\nSLS DataFrame after type conversion (info):\n")
+            final_df.info()
 
         output_file_path = self.data_saver.save(final_df, filename_prefix="SLS")
-        print("--- SLS Data Pipeline Finished ---")
+        
+        if verbose:
+            print("--- SLS Data Pipeline Finished ---")
         return output_file_path
 
-    def run_sdet_pipeline(self, all_sheets_dict: dict[str, pd.DataFrame]) -> str:
+    def run_sdet_pipeline(self, all_sheets_dict: dict[str, pd.DataFrame], verbose: bool = True) -> str:
         """Executes the SDET data pipeline."""
-        print("\n--- SDET Data Pipeline Started ---")
+        if verbose:
+            print("\n--- SDET Data Pipeline Started ---")
+        
         processed_df = self.sdet_transformer.transform(all_sheets_dict)
-        print(f"\nSDET DataFrame after transformation (first 5 rows):\n{processed_df.head().to_string()}")
-        print(f"\nSDET DataFrame after transformation (info):\n")
-        processed_df.info()
+        
+        if verbose:
+            print(f"\nSDET DataFrame after transformation (first 5 rows):\n{processed_df.head().to_string()}")
+            print(f"\nSDET DataFrame after transformation (info):\n")
+            processed_df.info()
 
         final_df = self.sdet_type_converter.convert_types(processed_df)
-        print(f"\nSDET DataFrame after type conversion (first 5 rows):\n{final_df.head().to_string()}")
-        print(f"\nSDET DataFrame after type conversion (info):\n")
-        final_df.info()
+        
+        if verbose:
+            print(f"\nSDET DataFrame after type conversion (first 5 rows):\n{final_df.head().to_string()}")
+            print(f"\nSDET DataFrame after type conversion (info):\n")
+            final_df.info()
 
         output_file_path = self.data_saver.save(final_df, filename_prefix="SDET")
-        print("--- SDET Data Pipeline Finished ---")
+        
+        if verbose:
+            print("--- SDET Data Pipeline Finished ---")
         return output_file_path
 
     def run_all_pipelines(self) -> dict[str, str]:
-        """Runs all defined pipelines."""
-        print("\n--- Starting All Data Pipelines ---")
-        all_sheets_dict = self.data_reader.read_sheets()
+        """Runs all defined pipelines. Legacy method for backward compatibility."""
+        return self.process_both(verbose=True)
 
-        sls_output = self.run_sls_pipeline(all_sheets_dict)
-        sdet_output = self.run_sdet_pipeline(all_sheets_dict)
+    @staticmethod
+    def _get_sls_columns() -> list[str]:
+        """Returns SLS target columns configuration."""
+        return [
+            'branch_id', 'brand','branch', 'bill_no', 'fact_no', 'session_no',
+            'table', 'seat_no', 'waiter', 'people_no', 'pay_type',
+            'disc_type', 'open_time', 'date', 'bill_time', 'bill_date',
+            'printed', 'posted', 'total', 'received', 'taxes',
+            'auto_grat', 'login_ref', 'cash_draw', 'sale_type', 'sale_area',
+            'acc_posted', 'discount', 'dollardisc', 'taxable', 'prt_time',
+            'prt_date', 'disc_pct', 'hidden', 'tax_table', 'account_no',
+            'rev_center', 'phone', 'cust_id', 'phone_id', 'gratovrpct',
+            'gratovramt', 'note', 'sls_name', 'cash_back', 'trans_id', 'start_stn',
+            'settle_stn', 'waiter0', 'send_time', 'assg_time', 'tray_ref',
+            'notaxamt', 'retn_time', 'address_id', 'addr_mode', 'advconvert', 'ready_time', 'dlv_time'
+        ]
 
-        print("\n--- All Mo Cookies Data Pipelines Finished ---")
-        return {"sls_file": sls_output, "sdet_file": sdet_output}
+    @staticmethod
+    def _get_sls_column_mapping() -> dict[str, str]:
+        """Returns SLS column mapping configuration."""
+        return {
+            'bill_no': 'Transaction No.',
+            'table': 'Table No.',
+            'waiter': 'Staff ID',
+            'people_no': 'No. of Covers',
+            'pay_type': 'Tender Type',
+            'disc_type': 'Discount Module Name',
+            'open_time': 'Time',
+            'date': 'Date',
+            'bill_time': 'Time',
+            'bill_date': 'Date',
+            'total': 'Price',
+            'received': 'Price',
+            'taxes': 'VAT Amount',
+            'auto_grat': 'Income/Exp. Amount',
+            'sale_type': 'Sales Type',
+            'discount': 'Discount Amount',
+            'taxable': 'VAT Amount',
+            'prt_time': 'Time',
+            'prt_date': 'Date',
+            'rev_center': 'Sales Type',
+            'note': 'Information',
+            'trans_id': 'Transaction No.',
+            'send_time': 'Time',
+            'ready_time': 'Time',
+            'dlv_time': 'Time'
+        }
+
+    @staticmethod
+    def _get_sdet_columns() -> list[str]:
+        """Returns SDET target columns configuration."""
+        return [
+            'branch_id', 'brand', 'branch', 'bill_no', 'ref_no',
+            'quanty', 'price_paid', 'raw_price', 'cost', 'posted',
+            'emp_no', 'del_code', 'prc_adj', 'two4one', 'disc_no',
+            'prc_lvl', 'prc_lvl0', 'iscoupon', 'item_adj', 'vat_adj',
+            'disc_adj', 'pricemult', 'invmult', 'gd_no', 'send_time',
+            'adj_no', 'refundflag', 'cou_rec', 'coupitem', 'hash_stat',
+            'ord_date', 'ord_time', 'spec_inst'
+        ]
+
+    @staticmethod
+    def _get_sdet_column_mapping() -> dict[str, str]:
+        """Returns SDET column mapping configuration."""
+        return {
+            'brand': 'Brand',
+            'branch': 'Branch',
+            'bill_no': 'Transaction No.',
+            'ref_no': 'Item No.',
+            'quanty': 'Quantity',
+            'price_paid': 'Price',
+            'raw_price': 'Net Price',
+            'cost': 'Cost Amount',
+            'emp_no': 'Staff ID', 'disc_no': 'Discount Module Name',
+            'vat_adj': 'VAT Amount',
+            'disc_adj': 'Discount Amount',
+            'send_time': 'Time',
+            'ord_date': 'Date',
+            'ord_time': 'Time'
+        }
+
+    @staticmethod
+    def _get_sls_dtype_map() -> dict[str, str]:
+        """Returns SLS data type mapping configuration."""
+        return {
+            'branch_id': 'int64',
+            'brand': 'object',
+            'branch': 'object',
+            'bill_no': 'object',
+            'fact_no': 'float64',
+            'session_no': 'float64',
+            'table': 'int64',
+            'seat_no': 'int64',
+            'waiter': 'int64',
+            'people_no': 'int64',
+            'pay_type': 'int64',
+            'disc_type': 'object',
+            'open_time': 'object',
+            'date': 'object',
+            'bill_time': 'object',
+            'bill_date': 'object',
+            'printed': 'bool',
+            'posted': 'bool',
+            'total': 'float64',
+            'received': 'float64',
+            'taxes': 'float64',
+            'auto_grat': 'float64',
+            'login_ref': 'int64',
+            'cash_draw': 'int64',
+            'sale_type': 'object',
+            'sale_area': 'int64',
+            'acc_posted': 'bool',
+            'discount': 'float64',
+            'dollardisc': 'int64',
+            'taxable': 'bool',
+            'prt_time': 'object',
+            'prt_date': 'object',
+            'disc_pct': 'float64',
+            'hidden': 'bool',
+            'tax_table': 'int64',
+            'account_no': 'float64',
+            'rev_center': 'object',
+            'phone': 'float64',
+            'cust_id': 'int64',
+            'phone_id': 'int64',
+            'gratovrpct': 'float64',
+            'gratovramt': 'int64',
+            'note': 'object',
+            'sls_name': 'float64',
+            'cash_back': 'int64',
+            'trans_id': 'int64',
+            'start_stn': 'int64',
+            'settle_stn': 'int64',
+            'waiter0': 'int64',
+            'send_time': 'object',
+            'assg_time': 'float64',
+            'tray_ref': 'int64',
+            'notaxamt': 'int64',
+            'retn_time': 'float64',
+            'address_id': 'int64',
+            'addr_mode': 'int64',
+            'advconvert': 'int64',
+            'ready_time': 'object',
+            'dlv_time': 'object'
+        }
+
+    @staticmethod
+    def _get_sdet_dtype_map() -> dict[str, str]:
+        """Returns SDET data type mapping configuration."""
+        return {
+            'branch_id': 'int64',
+            'brand': 'object',
+            'branch': 'object',
+            'bill_no': 'object',
+            'ref_no': 'object',
+            'quanty': 'int64',
+            'price_paid': 'float64',
+            'raw_price': 'float64',
+            'cost': 'float64',
+            'posted': 'bool',
+            'emp_no': 'int64',
+            'del_code': 'int64',
+            'prc_adj': 'bool',
+            'two4one': 'bool',
+            'disc_no': 'object',
+            'prc_lvl': 'int64',
+            'prc_lvl0': 'int64',
+            'iscoupon': 'bool',
+            'item_adj': 'int64',
+            'vat_adj': 'float64',
+            'disc_adj': 'float64',
+            'pricemult': 'int64',
+            'invmult': 'int64',
+            'gd_no': 'int64',
+            'send_time': 'object',
+            'adj_no': 'int64',
+            'refundflag': 'bool',
+            'cou_rec': 'int64',
+            'coupitem': 'bool',
+            'hash_stat': 'int64',
+            'ord_date': 'object',
+            'ord_time': 'object',
+            'spec_inst': 'float64'
+        }
     
 if __name__ == "__main__":
     # --- Configuration Parameters ---
-    EXCEL_FILE_PATH = "Manam GH August 1-17, 2025.xlsx" # <--- IMPORTANT: Change this to your actual Excel file path
+    EXCEL_FILE_PATH = "Manam GH August 1-17, 2025.xlsx"
+    BRANCH_MAPPING_FILE_PATH = "branch_mapping.xlsx"
     OUTPUT_DIRECTORY = "output_data"
-    BRANCH_MAPPING_FILE = pd.read_excel("branch_mapping.xlsx") # <--- IMPORTANT: Change this if your branch mapping is a different file
-
-    # Define the branch mapping data (example - replace with your actual data or load from file)
-    # This DataFrame maps ERP codes to internal branch IDs, names, and brands.
-    # In a real scenario, this would likely come from a database or another configuration file.
-    # branch_mapping_data = {
-    #     'erp_code': [101, 102, 103, 104, 105],
-    #     'branch_id': [1, 2, 3, 4, 5],
-    #     'branch': ['Downtown Store', 'Uptown Store', 'Mall Kiosk', 'Online Warehouse', 'Flagship Store'],
-    #     'brand': ['BrandA', 'BrandA', 'BrandB', 'BrandC', 'BrandA']
-    # }
-    # For demonstration, creating a dummy DataFrame. In a real app, you might load this:
-    # branch_mapping_df = pd.read_excel(BRANCH_MAPPING_FILE)
-    # branch_mapping_df = pd.DataFrame(branch_mapping_data)
-    # print("Branch Mapping DataFrame used:\n", branch_mapping_df)
-
-
-    # --- SLS Table Definitions ---
-    SLS_TARGET_COLUMNS = [
-        'branch_id', 'brand','branch', 'bill_no', 'fact_no', 'session_no',
-        'table', 'seat_no', 'waiter', 'people_no', 'pay_type',
-        'disc_type', 'open_time', 'date', 'bill_time', 'bill_date',
-        'printed', 'posted', 'total', 'received', 'taxes',
-        'auto_grat', 'login_ref', 'cash_draw', 'sale_type', 'sale_area',
-        'acc_posted', 'discount', 'dollardisc', 'taxable', 'prt_time',
-        'prt_date', 'disc_pct', 'hidden', 'tax_table', 'account_no',
-        'rev_center', 'phone', 'cust_id', 'phone_id', 'gratovrpct',
-        'gratovramt', 'note', 'sls_name', 'cash_back', 'trans_id', 'start_stn',
-        'settle_stn', 'waiter0', 'send_time', 'assg_time', 'tray_ref',
-        'notaxamt', 'retn_time', 'address_id', 'addr_mode', 'advconvert', 'ready_time', 'dlv_time'
-    ]
-
-    SLS_COLUMN_MAPPING = {
-        'bill_no': 'Transaction No.',
-        'table': 'Table No.',
-        'waiter': 'Staff ID',
-        'people_no': 'No. of Covers',
-        'pay_type': 'Tender Type',
-        'disc_type': 'Discount Module Name',
-        'open_time': 'Time',
-        'date': 'Date',
-        'bill_time': 'Time',
-        'bill_date': 'Date',
-        'total': 'Price',
-        'received': 'Price',
-        'taxes': 'VAT Amount',
-        'auto_grat': 'Income/Exp. Amount',
-        'sale_type': 'Sales Type',
-        'discount': 'Discount Amount',
-        'taxable': 'VAT Amount',
-        'prt_time': 'Time',
-        'prt_date': 'Date',
-        'rev_center': 'Sales Type',
-        'note': 'Information',
-        'trans_id': 'Transaction No.',
-        'send_time': 'Time',
-        'ready_time': 'Time',
-        'dlv_time': 'Time'
-        # Other columns will be filled by default mapping or are fixed values
-    }
-
-    # Define SQL-like data types for SLS (and their pandas equivalents)
-    SLS_SQL_TO_PANDAS_DTYPE_MAP = {
-        'branch_id': 'int64',
-        'brand': 'object',
-        'branch': 'object',
-        'bill_no': 'object',
-        'fact_no': 'float64',  # 0 non-null, inferred as float64
-        'session_no': 'float64', # 0 non-null, inferred as float64
-        'table': 'int64',
-        'seat_no': 'int64',      # Inferred as int64
-        'waiter': 'int64',
-        'people_no': 'int64',
-        'pay_type': 'int64',
-        'disc_type': 'object',   # 1216 non-null, inferred as object
-        'open_time': 'object',
-        'date': 'object',
-        'bill_time': 'object',
-        'bill_date': 'object',
-        'printed': 'bool',
-        'posted': 'bool',
-        'total': 'float64',
-        'received': 'float64',
-        'taxes': 'float64',
-        'auto_grat': 'float64',
-        'login_ref': 'int64',
-        'cash_draw': 'int64',
-        'sale_type': 'object',
-        'sale_area': 'int64',
-        'acc_posted': 'bool',
-        'discount': 'float64',
-        'dollardisc': 'int64',
-        'taxable': 'bool',      # Inferred as bool
-        'prt_time': 'object',
-        'prt_date': 'object',
-        'disc_pct': 'float64',  # Inferred as float64
-        'hidden': 'bool',
-        'tax_table': 'int64',
-        'account_no': 'float64', # 0 non-null, inferred as float64
-        'rev_center': 'object',
-        'phone': 'float64',      # 0 non-null, inferred as float64
-        'cust_id': 'int64',
-        'phone_id': 'int64',
-        'gratovrpct': 'float64',
-        'gratovramt': 'int64',
-        'note': 'object',       # 38 non-null, inferred as float64
-        'sls_name': 'float64',   # 0 non-null, inferred as float64
-        'cash_back': 'int64',
-        'trans_id': 'int64',
-        'start_stn': 'int64',
-        'settle_stn': 'int64',
-        'waiter0': 'int64',
-        'send_time': 'object',
-        'assg_time': 'float64',  # 0 non-null, inferred as float64
-        'tray_ref': 'int64',
-        'notaxamt': 'int64',
-        'retn_time': 'float64',  # 0 non-null, inferred as float64
-        'address_id': 'int64',
-        'addr_mode': 'int64',
-        'advconvert': 'int64',
-        'ready_time': 'object',
-        'dlv_time': 'object'
-    }
-
-    # --- SDET Table Definitions ---
-    SDET_TARGET_COLUMNS = [
-        'branch_id', 'brand', 'branch', 'bill_no', 'ref_no',
-        'quanty', 'price_paid', 'raw_price', 'cost', 'posted',
-        'emp_no', 'del_code', 'prc_adj', 'two4one', 'disc_no',
-        'prc_lvl', 'prc_lvl0', 'iscoupon', 'item_adj', 'vat_adj',
-        'disc_adj', 'pricemult', 'invmult', 'gd_no', 'send_time',
-        'adj_no', 'refundflag', 'cou_rec', 'coupitem', 'hash_stat',
-        'ord_date', 'ord_time', 'spec_inst'
-    ]
-
-    SDET_COLUMN_MAPPING = {
-        'brand': 'Brand',
-        'branch': 'Branch',
-        'bill_no': 'Transaction No.',
-        'ref_no': 'Item No.',
-        'quanty': 'Quantity',
-        'price_paid': 'Price',
-        'raw_price': 'Net Price',
-        'cost': 'Cost Amount',
-        'emp_no': 'Staff ID', 'disc_no': 'Discount Module Name',
-        'vat_adj': 'VAT Amount',
-        'disc_adj': 'Discount Amount',
-        'send_time': 'Time',
-        'ord_date': 'Date',
-        'ord_time': 'Time'
-        # Other columns will be filled by default mapping or are fixed values
-    }
-
-    # Define SQL-like data types for SDET
-    SDET_SQL_TO_PANDAS_DTYPE_MAP = {
-        'branch_id': 'int64',
-        'brand': 'object',
-        'branch': 'object',
-        'bill_no': 'object',
-        'ref_no': 'object',
-        'quanty': 'int64',
-        'price_paid': 'float64',
-        'raw_price': 'float64',
-        'cost': 'float64',
-        'posted': 'bool',
-        'emp_no': 'int64',
-        'del_code': 'int64',
-        'prc_adj': 'bool',
-        'two4one': 'bool',
-        'disc_no': 'object',    # 877 non-null, inferred as object
-        'prc_lvl': 'int64',
-        'prc_lvl0': 'int64',
-        'iscoupon': 'bool',
-        'item_adj': 'int64',
-        'vat_adj': 'float64',
-        'disc_adj': 'float64',
-        'pricemult': 'int64',
-        'invmult': 'int64',
-        'gd_no': 'int64',
-        'send_time': 'object',
-        'adj_no': 'int64',
-        'refundflag': 'bool',
-        'cou_rec': 'int64',
-        'coupitem': 'bool',
-        'hash_stat': 'int64',
-        'ord_date': 'object',
-        'ord_time': 'object',
-        'spec_inst': 'float64'
-    }
 
     try:
-        # --- Instantiate Components ---
-        data_reader = ExcelDataReader(file_path=EXCEL_FILE_PATH, header_row=2) # Assuming header is on 3rd row (index 2)
+        # NEW REUSABLE APPROACH - Perfect for orchestrators
+        print("=== Using New Reusable Pipeline Interface ===")
+        
+        # Create pipeline from files (orchestrators can use this pattern)
+        pipeline = PipelineRunner.create_from_files(
+            excel_file_path=EXCEL_FILE_PATH,
+            branch_mapping_file_path=BRANCH_MAPPING_FILE_PATH,
+            output_directory=OUTPUT_DIRECTORY
+        )
+        
+        # Example 1: Process only SLS (Sales Header)
+        print("\n--- Example: SLS Only ---")
+        sls_file = pipeline.process_sls_only(verbose=False)  # Set verbose=False for orchestrators
+        print(f"SLS file generated: {sls_file}")
+        
+        # Example 2: Process only SDET (Sales Detail) 
+        print("\n--- Example: SDET Only ---")
+        sdet_file = pipeline.process_sdet_only(verbose=False)  # Set verbose=False for orchestrators
+        print(f"SDET file generated: {sdet_file}")
+        
+        # Example 3: Process both (equivalent to run_all_pipelines)
+        print("\n--- Example: Both SLS and SDET ---")
+        both_files = pipeline.process_both(verbose=True)
+        print(f"All files generated: {both_files}")
 
+        # LEGACY APPROACH - Still works for backward compatibility
+        print("\n=== Legacy Approach (Still Supported) ===")
+        
+        # Load branch mapping
+        branch_mapping_df = pd.read_excel(BRANCH_MAPPING_FILE_PATH)
+        
+        # Create components manually (old way)
+        data_reader = ExcelDataReader(file_path=EXCEL_FILE_PATH, header_row=2)
+        
         sls_transformer = SlsDataFrameTransformer(
-            branch_mapping_df=BRANCH_MAPPING_FILE,
-            sls_columns=SLS_TARGET_COLUMNS,
-            column_mapping=SLS_COLUMN_MAPPING
+            branch_mapping_df=branch_mapping_df,
+            sls_columns=PipelineRunner._get_sls_columns(),
+            column_mapping=PipelineRunner._get_sls_column_mapping()
         )
-
+        
         sdet_transformer = SdetDataFrameTransformer(
-            branch_mapping_df=BRANCH_MAPPING_FILE,
-            sdet_columns=SDET_TARGET_COLUMNS,
-            column_mapping=SDET_COLUMN_MAPPING
+            branch_mapping_df=branch_mapping_df,
+            sdet_columns=PipelineRunner._get_sdet_columns(),
+            column_mapping=PipelineRunner._get_sdet_column_mapping()
         )
-
-        sls_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=SLS_SQL_TO_PANDAS_DTYPE_MAP)
-        sdet_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=SDET_SQL_TO_PANDAS_DTYPE_MAP)
-
+        
+        sls_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=PipelineRunner._get_sls_dtype_map())
+        sdet_type_converter = DataTypeConverter(sql_to_pandas_dtype_map=PipelineRunner._get_sdet_dtype_map())
+        
         data_saver = DataSaver(output_dir=OUTPUT_DIRECTORY)
-
-        # --- Create and Run PipelineRunner ---
-        pipeline_runner = PipelineRunner(
+        
+        # Create legacy pipeline runner
+        legacy_pipeline = PipelineRunner(
             data_reader=data_reader,
             sls_transformer=sls_transformer,
             sdet_transformer=sdet_transformer,
@@ -676,14 +815,14 @@ if __name__ == "__main__":
             sdet_type_converter=sdet_type_converter,
             data_saver=data_saver
         )
-
-        # Execute all pipelines
-        output_files = pipeline_runner.run_all_pipelines()
-        print(f"\nAll pipelines completed. Output files: {output_files}")
+        
+        # Run legacy way
+        legacy_output = legacy_pipeline.run_all_pipelines()
+        print(f"Legacy output: {legacy_output}")
 
     except FileNotFoundError as e:
         print(f"Error: {e}")
-        print(f"Please ensure '{EXCEL_FILE_PATH}' and '{BRANCH_MAPPING_FILE}' exist in the correct directory.")
+        print(f"Please ensure '{EXCEL_FILE_PATH}' and '{BRANCH_MAPPING_FILE_PATH}' exist in the correct directory.")
     except ValueError as e:
         print(f"Data Error: {e}")
     except Exception as e:
