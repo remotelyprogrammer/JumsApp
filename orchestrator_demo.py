@@ -46,18 +46,11 @@ if __name__ == "__main__":
     # Example usage for orchestrator
     
     # File paths
-    excel_file = "Manam GH August 1-17, 2025.xlsx"
+    excel_file = "Manam Cebu July 1-9, 2025.xlsx"
     branch_mapping = "branch_mapping.xlsx"
     output_directory = "output_data"
     
     print("=== Orchestrator Demo - Processing Only SLS ===")
-    sls_result = process_file_for_orchestrator(excel_file, branch_mapping, output_directory, "sls")
+    sls_result = process_file_for_orchestrator(excel_file, branch_mapping, output_directory, "both")
     print(f"SLS Result: {sls_result}")
-    
-    print("\n=== Orchestrator Demo - Processing Only SDET ===")
-    sdet_result = process_file_for_orchestrator(excel_file, branch_mapping, output_directory, "sdet")
-    print(f"SDET Result: {sdet_result}")
-    
-    print("\n=== Orchestrator Demo - Processing Both ===")
-    both_result = process_file_for_orchestrator(excel_file, branch_mapping, output_directory, "both")
-    print(f"Both Result: {both_result}")
+
