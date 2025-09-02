@@ -186,8 +186,22 @@ class SlsDataFrameTransformer(BaseDataFrameTransformer):
 
         print("SLS: Merging dataframes...")
         merged_df = pd.merge(sls_df, tse_sls_grouped, on='Transaction No.', how='left')
-        merged_df = pd.merge(merged_df, tpe_sls, on='Transaction No.', how='left')
-        merged_df = pd.merge(merged_df, tie_sls, on='Transaction No.', how='left')
+        merged_df = pd.merge(merged_df, tpe_sls, on='Transaction No.', how='left', suffixes=('', '_payment'))
+        merged_df = pd.merge(merged_df, tie_sls, on='Transaction No.', how='left', suffixes=('', '_infocode'))
+        
+        # Fix column naming conflicts - prioritize TSE (Sales Entry) Time/Date over others
+        if 'Time_infocode' in merged_df.columns and 'Time' in merged_df.columns:
+            # Keep TSE Time, rename infocode Time
+            merged_df = merged_df.drop(columns=['Time_infocode'])
+        if 'Date_infocode' in merged_df.columns and 'Date' in merged_df.columns:
+            # Keep TSE Date, rename infocode Date  
+            merged_df = merged_df.drop(columns=['Date_infocode'])
+            
+        # Handle payment entry conflicts
+        if 'Time_payment' in merged_df.columns:
+            merged_df = merged_df.drop(columns=['Time_payment']) 
+        if 'Date_payment' in merged_df.columns:
+            merged_df = merged_df.drop(columns=['Date_payment'])
 
         # Convert all applicable columns to string before mapping to avoid type conflicts during merge.
         # This is a robust approach, then specific types are applied by DataTypeConverter
