@@ -346,7 +346,19 @@ class DataTypeConverter:
 
         # Handle float columns
         for col in float_columns:
-            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce').fillna(0.0).astype('float64')
+            df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce').fillna(0.0)
+            
+            # Apply proper rounding for monetary/financial columns to avoid precision errors
+            if col in ['total', 'received', 'taxes', 'auto_grat', 'discount', 'taxable', 
+                      'disc_pct', 'dollardisc', 'gratovrpct', 'gratovramt', 'cash_back',
+                      'notaxamt', 'price_paid', 'raw_price', 'cost', 'vat_adj', 'disc_adj']:
+                # Round to 2 decimal places for currency values
+                df_copy[col] = df_copy[col].round(2)
+            else:
+                # Round to 4 decimal places for other float values  
+                df_copy[col] = df_copy[col].round(4)
+                
+            df_copy[col] = df_copy[col].astype('float64')
 
         # Handle boolean columns
         for col in boolean_columns:
