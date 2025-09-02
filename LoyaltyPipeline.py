@@ -223,6 +223,7 @@ class SdetDataFrameTransformer(BaseDataFrameTransformer):
             'del_code': False,
             'prc_adj': False,
             'two4one': False,
+            'disc_no': '', # Ensure disc_no defaults to empty string instead of NaN
             'prc_lvl': 0,
             'prc_lvl0': 0,
             'iscoupon': False,
@@ -281,9 +282,13 @@ class SdetDataFrameTransformer(BaseDataFrameTransformer):
         sdet_df['Quantity'] = sdet_df['Quantity'].abs()
         sdet_df['Cost Amount'] = sdet_df['Cost Amount'].abs()
 
-        # Convert to object type for flexible initial merging
+        # Convert to object type for flexible initial merging, handling NaN properly
         for col in sdet_df.columns:
-             sdet_df[col] = sdet_df[col].astype(str)
+            # For string/text columns, replace NaN with empty string before converting to string
+            if col in ['Discount Module Name', 'Staff ID']:
+                sdet_df[col] = sdet_df[col].fillna('').astype(str)
+            else:
+                sdet_df[col] = sdet_df[col].astype(str)
 
         print("SDET: Creating sdet_table and applying column mapping & defaults...")
         sdet_table = pd.DataFrame(index=sdet_df.index, columns=self.target_columns)
@@ -341,7 +346,8 @@ class DataTypeConverter:
 
         # Handle object (string) columns - do this last as other conversions might rely on initial object type
         for col in object_columns:
-            df_copy[col] = df_copy[col].astype(str).fillna("")
+            # Convert to string and handle 'nan' strings by replacing them with empty strings
+            df_copy[col] = df_copy[col].astype(str).replace('nan', '').fillna("")
 
         print("Data type conversion completed.")
         return df_copy
